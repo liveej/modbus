@@ -53,6 +53,8 @@ type tcpPackager struct {
 	transactionId uint32
 	// Broadcast address is 0
 	SlaveId byte
+	//RTU over TCP mode
+	RtuOverTCP bool
 }
 
 // Encode adds modbus application protocol header:
@@ -63,47 +65,84 @@ type tcpPackager struct {
 //  Function code: 1 byte
 //  Data: n bytes
 func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
-	adu = make([]byte, tcpHeaderSize+1+len(pdu.Data))
+	if mb.RtuOverTCP {
+		length := len(pdu.Data) + 4
+		if length > rtuMaxSize {
+			err = fmt.Errorf("modbus: length of data '%v' must not be bigger than '%v'", length, rtuMaxSize)
+			return
+		}
+		adu = make([]byte, length)
 
-	// Transaction identifier
-	transactionId := atomic.AddUint32(&mb.transactionId, 1)
-	binary.BigEndian.PutUint16(adu, uint16(transactionId))
-	// Protocol identifier
-	binary.BigEndian.PutUint16(adu[2:], tcpProtocolIdentifier)
-	// Length = sizeof(SlaveId) + sizeof(FunctionCode) + Data
-	length := uint16(1 + 1 + len(pdu.Data))
-	binary.BigEndian.PutUint16(adu[4:], length)
-	// Unit identifier
-	adu[6] = mb.SlaveId
+		adu[0] = mb.SlaveId
+		adu[1] = pdu.FunctionCode
+		copy(adu[2:], pdu.Data)
 
-	// PDU
-	adu[tcpHeaderSize] = pdu.FunctionCode
-	copy(adu[tcpHeaderSize+1:], pdu.Data)
-	return
+		// Append crc
+		var crc crc
+		crc.reset().pushBytes(adu[0 : length-2])
+		checksum := crc.value()
+
+		adu[length-1] = byte(checksum >> 8)
+		adu[length-2] = byte(checksum)
+		return
+	} else {
+		adu = make([]byte, tcpHeaderSize+1+len(pdu.Data))
+
+		// Transaction identifier
+		transactionId := atomic.AddUint32(&mb.transactionId, 1)
+		binary.BigEndian.PutUint16(adu, uint16(transactionId))
+		// Protocol identifier
+		binary.BigEndian.PutUint16(adu[2:], tcpProtocolIdentifier)
+		// Length = sizeof(SlaveId) + sizeof(FunctionCode) + Data
+		length := uint16(1 + 1 + len(pdu.Data))
+		binary.BigEndian.PutUint16(adu[4:], length)
+		// Unit identifier
+		adu[6] = mb.SlaveId
+
+		// PDU
+		adu[tcpHeaderSize] = pdu.FunctionCode
+		copy(adu[tcpHeaderSize+1:], pdu.Data)
+		return
+	}
 }
 
 // Verify confirms transaction, protocol and unit id.
 func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error) {
-	// Transaction id
-	responseVal := binary.BigEndian.Uint16(aduResponse)
-	requestVal := binary.BigEndian.Uint16(aduRequest)
-	if responseVal != requestVal {
-		err = fmt.Errorf("modbus: response transaction id '%v' does not match request '%v'", responseVal, requestVal)
+	if mb.RtuOverTCP {
+		length := len(aduResponse)
+		// Minimum size (including address, function and CRC)
+		if length < rtuMinSize {
+			err = fmt.Errorf("modbus: response length '%v' does not meet minimum '%v'", length, rtuMinSize)
+			return
+		}
+		// Slave address must match
+		if aduResponse[0] != aduRequest[0] {
+			err = fmt.Errorf("modbus: response slave id '%v' does not match request '%v'", aduResponse[0], aduRequest[0])
+			return
+		}
+		return
+	} else {
+		// Transaction id
+		responseVal := binary.BigEndian.Uint16(aduResponse)
+		requestVal := binary.BigEndian.Uint16(aduRequest)
+		if responseVal != requestVal {
+			err = fmt.Errorf("modbus: response transaction id '%v' does not match request '%v'", responseVal, requestVal)
+			return
+		}
+		// Protocol id
+		responseVal = binary.BigEndian.Uint16(aduResponse[2:])
+		requestVal = binary.BigEndian.Uint16(aduRequest[2:])
+		if responseVal != requestVal {
+			err = fmt.Errorf("modbus: response protocol id '%v' does not match request '%v'", responseVal, requestVal)
+			return
+		}
+		// Unit id (1 byte)
+		if aduResponse[6] != aduRequest[6] {
+			err = fmt.Errorf("modbus: response unit id '%v' does not match request '%v'", aduResponse[6], aduRequest[6])
+			return
+		}
 		return
 	}
-	// Protocol id
-	responseVal = binary.BigEndian.Uint16(aduResponse[2:])
-	requestVal = binary.BigEndian.Uint16(aduRequest[2:])
-	if responseVal != requestVal {
-		err = fmt.Errorf("modbus: response protocol id '%v' does not match request '%v'", responseVal, requestVal)
-		return
-	}
-	// Unit id (1 byte)
-	if aduResponse[6] != aduRequest[6] {
-		err = fmt.Errorf("modbus: response unit id '%v' does not match request '%v'", aduResponse[6], aduRequest[6])
-		return
-	}
-	return
 }
 
 // Decode extracts PDU from TCP frame:
@@ -112,18 +151,36 @@ func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error)
 //  Length: 2 bytes
 //  Unit identifier: 1 byte
 func (mb *tcpPackager) Decode(adu []byte) (pdu *ProtocolDataUnit, err error) {
-	// Read length value in the header
-	length := binary.BigEndian.Uint16(adu[4:])
-	pduLength := len(adu) - tcpHeaderSize
-	if pduLength <= 0 || pduLength != int(length-1) {
-		err = fmt.Errorf("modbus: length in response '%v' does not match pdu data length '%v'", length-1, pduLength)
+	if mb.RtuOverTCP {
+		length := len(adu)
+		// Calculate checksum
+		var crc crc
+		crc.reset().pushBytes(adu[0 : length-2])
+		checksum := uint16(adu[length-1])<<8 | uint16(adu[length-2])
+		if checksum != crc.value() {
+			err = fmt.Errorf("modbus: response crc '%v' does not match expected '%v'", checksum, crc.value())
+			return
+		}
+		// Function code & data
+		pdu = &ProtocolDataUnit{}
+		pdu.FunctionCode = adu[1]
+		pdu.Data = adu[2 : length-2]
+		return
+	} else {
+		// Read length value in the header
+		length := binary.BigEndian.Uint16(adu[4:])
+		pduLength := len(adu) - tcpHeaderSize
+		if pduLength <= 0 || pduLength != int(length-1) {
+			err = fmt.Errorf("modbus: length in response '%v' does not match pdu data length '%v'", length-1, pduLength)
+			return
+		}
+		pdu = &ProtocolDataUnit{}
+		// The first byte after header is function code
+		pdu.FunctionCode = adu[tcpHeaderSize]
+		pdu.Data = adu[tcpHeaderSize+1:]
 		return
 	}
-	pdu = &ProtocolDataUnit{}
-	// The first byte after header is function code
-	pdu.FunctionCode = adu[tcpHeaderSize]
-	pdu.Data = adu[tcpHeaderSize+1:]
-	return
+
 }
 
 // tcpTransporter implements Transporter interface.
@@ -142,6 +199,9 @@ type tcpTransporter struct {
 	conn         net.Conn
 	closeTimer   *time.Timer
 	lastActivity time.Time
+
+	//RtuOverTCP
+	RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
 }
 
 // Send sends data to server and ensures response length is greater than header length.
@@ -165,38 +225,79 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 		return
 	}
 	// Send data
-	mb.logf("modbus: sending % x", aduRequest)
+	mb.logf("sending % x", aduRequest)
 	if _, err = mb.conn.Write(aduRequest); err != nil {
 		if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
-                        mb.close()
-                }
+			mb.close()
+		}
 		return
 	}
-	// Read header first
-	var data [tcpMaxLength]byte
-	if _, err = io.ReadFull(mb.conn, data[:tcpHeaderSize]); err != nil {
+
+	if mb.RtuOverTCPtp {
+		function := aduRequest[1]
+		functionFail := aduRequest[1] & 0x80
+		bytesToRead := calculateResponseLength(aduRequest)
+
+		var n int
+		var n1 int
+		var data [rtuMaxSize]byte
+		//We first read the minimum length and then read either the full package
+		//or the error package, depending on the error status (byte 2 of the response)
+		if n, err = io.ReadFull(mb.conn, data[:rtuMinSize]); err != nil {
+			return
+		}
+		//if the function is correct
+		if data[1] == function {
+			//we read the rest of the bytes
+			if n < bytesToRead {
+				if bytesToRead > rtuMinSize && bytesToRead <= rtuMaxSize {
+					if bytesToRead > n {
+						n1, err = io.ReadFull(mb.conn, data[n:bytesToRead])
+						n += n1
+					}
+				}
+			}
+		} else if data[1] == functionFail {
+			//for error we need to read 5 bytes
+			if n < rtuExceptionSize {
+				n1, err = io.ReadFull(mb.conn, data[n:rtuExceptionSize])
+			}
+			n += n1
+		}
+
+		if err != nil {
+			return
+		}
+		aduResponse = data[:n]
+		mb.logf("modbus: received % x\n", aduResponse)
+		return
+	} else {
+		// Read header first
+		var data [tcpMaxLength]byte
+		if _, err = io.ReadFull(mb.conn, data[:tcpHeaderSize]); err != nil {
+			return
+		}
+		// Read length, ignore transaction & protocol id (4 bytes)
+		length := int(binary.BigEndian.Uint16(data[4:]))
+		if length <= 0 {
+			mb.flush(data[:])
+			err = fmt.Errorf("modbus: length in response header '%v' must not be zero", length)
+			return
+		}
+		if length > (tcpMaxLength - (tcpHeaderSize - 1)) {
+			mb.flush(data[:])
+			err = fmt.Errorf("modbus: length in response header '%v' must not greater than '%v'", length, tcpMaxLength-tcpHeaderSize+1)
+			return
+		}
+		// Skip unit id
+		length += tcpHeaderSize - 1
+		if _, err = io.ReadFull(mb.conn, data[tcpHeaderSize:length]); err != nil {
+			return
+		}
+		aduResponse = data[:length]
+		mb.logf("modbus: received % x\n", aduResponse)
 		return
 	}
-	// Read length, ignore transaction & protocol id (4 bytes)
-	length := int(binary.BigEndian.Uint16(data[4:]))
-	if length <= 0 {
-		mb.flush(data[:])
-		err = fmt.Errorf("modbus: length in response header '%v' must not be zero", length)
-		return
-	}
-	if length > (tcpMaxLength - (tcpHeaderSize - 1)) {
-		mb.flush(data[:])
-		err = fmt.Errorf("modbus: length in response header '%v' must not greater than '%v'", length, tcpMaxLength-tcpHeaderSize+1)
-		return
-	}
-	// Skip unit id
-	length += tcpHeaderSize - 1
-	if _, err = io.ReadFull(mb.conn, data[tcpHeaderSize:length]); err != nil {
-		return
-	}
-	aduResponse = data[:length]
-	mb.logf("modbus: received % x\n", aduResponse)
-	return
 }
 
 // Connect establishes a new connection to the address in Address.
