@@ -26,6 +26,11 @@ type ASCIIClientHandler struct {
 	asciiSerialTransporter
 }
 
+func (A ASCIIClientHandler) WaitConnect() (err error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 // NewASCIIClientHandler allocates and initializes a ASCIIClientHandler.
 func NewASCIIClientHandler(address string) *ASCIIClientHandler {
 	handler := &ASCIIClientHandler{}

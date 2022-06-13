@@ -20,6 +20,10 @@ type client struct {
 	transporter Transporter
 }
 
+func (mb *client) WaitConnect() (err error) {
+	return mb.transporter.WaitConnect()
+}
+
 // NewClient creates a new modbus client with given backend handler.
 func NewClient(handler ClientHandler) Client {
 	return &client{packager: handler, transporter: handler}

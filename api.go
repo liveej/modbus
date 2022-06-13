@@ -49,4 +49,5 @@ type Client interface {
 
 	Connect() (err error)
 	Close() (err error)
+	WaitConnect() (err error)
 }
