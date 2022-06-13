@@ -15,11 +15,6 @@ import (
 	"time"
 )
 
-func (mb *tcpTransporter) WaitConnect() (err error) {
-
-	return
-}
-
 const (
 	tcpProtocolIdentifier uint16 = 0x0000
 

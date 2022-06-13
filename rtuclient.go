@@ -11,11 +11,6 @@ import (
 	"time"
 )
 
-func (mb *rtuSerialTransporter) WaitConnect() (err error) {
-
-	return
-}
-
 const (
 	rtuMinSize = 4
 	rtuMaxSize = 256

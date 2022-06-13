@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-func (mb *tcpServerTransporter) WaitConnect() error {
-	log.Println("listen on: ", mb.Address)
+func (mb *tcpServerTransporter) waitConnect() error {
+	mb.logf("listen on: %s", mb.Address)
 
 	if mb.listener == nil {
 		ln, err := net.Listen("tcp", mb.Address)
@@ -29,7 +29,7 @@ func (mb *tcpServerTransporter) WaitConnect() error {
 	if err != nil {
 		return err
 	}
-	log.Println("new connection: ", conn.RemoteAddr())
+	mb.logf("new connection: %s", conn.RemoteAddr())
 	mb.conn = conn
 	//go handle(conn)
 	return nil
@@ -187,7 +187,7 @@ func (mb *tcpServerTransporter) Connect() error {
 
 func (mb *tcpServerTransporter) connect() error {
 	if mb.conn == nil {
-		err := mb.WaitConnect()
+		err := mb.waitConnect()
 		if err != nil {
 			return err
 		}

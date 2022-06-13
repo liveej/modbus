@@ -92,5 +92,4 @@ type Transporter interface {
 	Send(aduRequest []byte) (aduResponse []byte, err error)
 	Connect() (err error)
 	Close() (err error)
-	WaitConnect() (err error)
 }
