@@ -76,6 +76,8 @@ type tcpServerTransporter struct {
 	//RtuOverTCP
 	RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
 
+	AsciiOverTCPtp bool
+
 	listener net.Listener
 }
 
@@ -146,6 +148,29 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		}
 		aduResponse = data[:n]
 		mb.logf("modbus: received % x\n", aduResponse)
+		return
+	} else if mb.AsciiOverTCPtp {
+		// Get the response
+		var n int
+		var data [asciiMaxSize]byte
+		length := 0
+		for {
+			if n, err = io.ReadFull(mb.conn, data[length:length+1]); err != nil {
+				return
+			}
+			length += n
+			if length >= asciiMaxSize || n == 0 {
+				break
+			}
+			// Expect end of frame in the data received
+			if length > asciiMinSize {
+				if string(data[length-len(asciiEnd):length]) == asciiEnd {
+					break
+				}
+			}
+		}
+		aduResponse = data[:length]
+		mb.logf("modbus: received %q\n", aduResponse)
 		return
 	} else {
 		// Read header first
