@@ -5,7 +5,9 @@
 package modbus
 
 import (
+	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -55,6 +57,8 @@ type tcpPackager struct {
 	SlaveId byte
 	//RTU over TCP mode
 	RtuOverTCP bool
+	//Ascii over TCP mode
+	AsciiOverTCP bool
 }
 
 // Encode adds modbus application protocol header:
@@ -84,6 +88,30 @@ func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 
 		adu[length-1] = byte(checksum >> 8)
 		adu[length-2] = byte(checksum)
+		return
+	} else if mb.AsciiOverTCP {
+		var buf bytes.Buffer
+
+		if _, err = buf.WriteString(asciiStart); err != nil {
+			return
+		}
+		if err = writeHex(&buf, []byte{mb.SlaveId, pdu.FunctionCode}); err != nil {
+			return
+		}
+		if err = writeHex(&buf, pdu.Data); err != nil {
+			return
+		}
+		// Exclude the beginning colon and terminating CRLF pair characters
+		var lrc lrc
+		lrc.reset()
+		lrc.pushByte(mb.SlaveId).pushByte(pdu.FunctionCode).pushBytes(pdu.Data)
+		if err = writeHex(&buf, []byte{lrc.value()}); err != nil {
+			return
+		}
+		if _, err = buf.WriteString(asciiEnd); err != nil {
+			return
+		}
+		adu = buf.Bytes()
 		return
 	} else {
 		adu = make([]byte, tcpHeaderSize+1+len(pdu.Data))
@@ -118,6 +146,45 @@ func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error)
 		// Slave address must match
 		if aduResponse[0] != aduRequest[0] {
 			err = fmt.Errorf("modbus: response slave id '%v' does not match request '%v'", aduResponse[0], aduRequest[0])
+			return
+		}
+		return
+	} else if mb.AsciiOverTCP {
+		length := len(aduResponse)
+		// Minimum size (including address, function and LRC)
+		if length < asciiMinSize+6 {
+			err = fmt.Errorf("modbus: response length '%v' does not meet minimum '%v'", length, 9)
+			return
+		}
+		// Length excluding colon must be an even number
+		if length%2 != 1 {
+			err = fmt.Errorf("modbus: response length '%v' is not an even number", length-1)
+			return
+		}
+		// First char must be a colon
+		str := string(aduResponse[0:len(asciiStart)])
+		if str != asciiStart {
+			err = fmt.Errorf("modbus: response frame '%v'... is not started with '%v'", str, asciiStart)
+			return
+		}
+		// 2 last chars must be \r\n
+		str = string(aduResponse[len(aduResponse)-len(asciiEnd):])
+		if str != asciiEnd {
+			err = fmt.Errorf("modbus: response frame ...'%v' is not ended with '%v'", str, asciiEnd)
+			return
+		}
+		// Slave id
+		var responseVal, requestVal byte
+		responseVal, err = readHex(aduResponse[1:])
+		if err != nil {
+			return
+		}
+		requestVal, err = readHex(aduRequest[1:])
+		if err != nil {
+			return
+		}
+		if responseVal != requestVal {
+			err = fmt.Errorf("modbus: response slave id '%v' does not match request '%v'", responseVal, requestVal)
 			return
 		}
 		return
@@ -166,6 +233,40 @@ func (mb *tcpPackager) Decode(adu []byte) (pdu *ProtocolDataUnit, err error) {
 		pdu.FunctionCode = adu[1]
 		pdu.Data = adu[2 : length-2]
 		return
+	} else if mb.AsciiOverTCP {
+		pdu = &ProtocolDataUnit{}
+		// Slave address
+		var address byte
+		address, err = readHex(adu[1:])
+		if err != nil {
+			return
+		}
+		// Function code
+		if pdu.FunctionCode, err = readHex(adu[3:]); err != nil {
+			return
+		}
+		// Data
+		dataEnd := len(adu) - 4
+		data := adu[5:dataEnd]
+		pdu.Data = make([]byte, hex.DecodedLen(len(data)))
+		if _, err = hex.Decode(pdu.Data, data); err != nil {
+			return
+		}
+		// LRC
+		var lrcVal byte
+		lrcVal, err = readHex(adu[dataEnd:])
+		if err != nil {
+			return
+		}
+		// Calculate checksum
+		var lrc lrc
+		lrc.reset()
+		lrc.pushByte(address).pushByte(pdu.FunctionCode).pushBytes(pdu.Data)
+		if lrcVal != lrc.value() {
+			err = fmt.Errorf("modbus: response lrc '%v' does not match expected '%v'", lrcVal, lrc.value())
+			return
+		}
+		return
 	} else {
 		// Read length value in the header
 		length := binary.BigEndian.Uint16(adu[4:])
@@ -202,6 +303,8 @@ type tcpTransporter struct {
 
 	//RtuOverTCP
 	RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
+	//Ascii over TCP mode
+	AsciiOverTCPtp bool
 }
 
 // Send sends data to server and ensures response length is greater than header length.
@@ -270,6 +373,29 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 		}
 		aduResponse = data[:n]
 		mb.logf("modbus: received % x\n", aduResponse)
+		return
+	} else if mb.AsciiOverTCPtp {
+		// Get the response
+		var n int
+		var data [asciiMaxSize]byte
+		length := 0
+		for {
+			if n, err = io.ReadFull(mb.conn, data[length:length+1]); err != nil {
+				return
+			}
+			length += n
+			if length >= asciiMaxSize || n == 0 {
+				break
+			}
+			// Expect end of frame in the data received
+			if length > asciiMinSize {
+				if string(data[length-len(asciiEnd):length]) == asciiEnd {
+					break
+				}
+			}
+		}
+		aduResponse = data[:length]
+		mb.logf("modbus: received %q\n", aduResponse)
 		return
 	} else {
 		// Read header first
