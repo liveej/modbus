@@ -255,6 +255,23 @@ func (mb *tcpServerTransporter) flush(b []byte) (err error) {
 	return
 }
 
+// Flush flushes pending data in the connection,
+// returns io.EOF if connection is closed.
+func (mb *tcpServerTransporter) Flush() (err error) {
+	var b [tcpMaxLength]byte
+	if err = mb.conn.SetReadDeadline(time.Now()); err != nil {
+		return
+	}
+	// Timeout setting will be reset when reading
+	if _, err = mb.conn.Read(b[:]); err != nil {
+		// Ignore timeout error
+		if netError, ok := err.(net.Error); ok && netError.Timeout() {
+			err = nil
+		}
+	}
+	return
+}
+
 func (mb *tcpServerTransporter) logf(format string, v ...interface{}) {
 	if mb.Logger != nil {
 		mb.Logger.Printf(format, v...)

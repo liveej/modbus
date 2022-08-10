@@ -110,6 +110,10 @@ type rtuSerialTransporter struct {
 	serialPort
 }
 
+func (mb *rtuSerialTransporter) Flush() error {
+	return nil
+}
+
 func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err error) {
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
