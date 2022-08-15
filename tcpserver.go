@@ -219,14 +219,7 @@ func (mb *tcpServerTransporter) Connect() error {
 
 func (mb *tcpServerTransporter) connect() error {
 	if mb.Conn == nil {
-		if mb.RegMsg == "" {
-			err := mb.waitConnect()
-			if err != nil {
-				return err
-			}
-		} else {
-			return errors.New("not connect")
-		}
+		return errors.New("disconnect")
 	}
 	return nil
 }
