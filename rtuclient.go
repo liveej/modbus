@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"time"
 )
 
@@ -112,6 +113,10 @@ type rtuSerialTransporter struct {
 
 func (mb *rtuSerialTransporter) Flush() error {
 	return nil
+}
+
+func (mb *rtuSerialTransporter) AssignConn(conn net.Conn) {
+
 }
 
 func (mb *rtuSerialTransporter) Send(aduRequest []byte) (aduResponse []byte, err error) {

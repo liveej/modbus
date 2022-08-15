@@ -7,6 +7,7 @@ package modbus
 import (
 	"encoding/binary"
 	"fmt"
+	"net"
 )
 
 // ClientHandler is the interface that groups the Packager and Transporter methods.
@@ -438,6 +439,10 @@ func (mb *client) Connect() (err error) {
 
 func (mb *client) Close() (err error) {
 	return mb.transporter.Close()
+}
+
+func (mb *client) AssignConn(conn net.Conn) {
+	mb.transporter.AssignConn(conn)
 }
 
 // Helpers

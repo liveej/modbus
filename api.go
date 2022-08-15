@@ -4,6 +4,9 @@
 
 package modbus
 
+import (
+	"net"
+)
 type Client interface {
 	// Bit access
 
@@ -49,4 +52,5 @@ type Client interface {
 
 	Connect() (err error)
 	Close() (err error)
+	AssignConn(conn net.Conn)
 }

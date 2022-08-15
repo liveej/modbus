@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"time"
 )
 
@@ -33,6 +34,10 @@ func NewASCIIClientHandler(address string) *ASCIIClientHandler {
 	handler.Timeout = serialTimeout
 	handler.IdleTimeout = serialIdleTimeout
 	return handler
+}
+
+func (mb *asciiSerialTransporter) AssignConn(conn net.Conn) {
+
 }
 
 // ASCIIClient creates ASCII client with default handler and given connect string.

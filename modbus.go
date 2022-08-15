@@ -9,6 +9,7 @@ package modbus
 
 import (
 	"fmt"
+	"net"
 )
 
 const (
@@ -93,4 +94,5 @@ type Transporter interface {
 	Connect() (err error)
 	Close() (err error)
 	Flush() (err error)
+	AssignConn(conn net.Conn)
 }

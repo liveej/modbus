@@ -34,6 +34,10 @@ type TCPClientHandler struct {
 	tcpTransporter
 }
 
+func (mb *tcpTransporter) AssignConn(conn net.Conn) {
+
+}
+
 // NewTCPClientHandler allocates a new TCPClientHandler.
 func NewTCPClientHandler(address string) *TCPClientHandler {
 	h := &TCPClientHandler{}

@@ -6,6 +6,7 @@ package modbus
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +14,10 @@ import (
 	"sync"
 	"time"
 )
+
+func (mb *tcpServerTransporter) AssignConn(conn net.Conn) {
+	mb.Conn = conn
+}
 
 func (mb *tcpServerTransporter) waitConnect() error {
 	mb.logf("listen on: %s", mb.Address)
@@ -30,8 +35,8 @@ func (mb *tcpServerTransporter) waitConnect() error {
 		return err
 	}
 	mb.logf("new connection: %s", conn.RemoteAddr())
-	mb.conn = conn
-	//go handle(conn)
+
+	mb.Conn = conn
 	return nil
 }
 
@@ -69,9 +74,11 @@ type tcpServerTransporter struct {
 
 	// TCP connection
 	mu           sync.Mutex
-	conn         net.Conn
+	Conn         net.Conn
 	closeTimer   *time.Timer
 	lastActivity time.Time
+
+	RegMsg string
 
 	//RtuOverTCP
 	RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
@@ -99,12 +106,12 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 	if mb.Timeout > 0 {
 		timeout = mb.lastActivity.Add(mb.Timeout)
 	}
-	if err = mb.conn.SetDeadline(timeout); err != nil {
+	if err = mb.Conn.SetDeadline(timeout); err != nil {
 		return
 	}
 	// Send data
 	mb.logf("sending % x", aduRequest)
-	if _, err = mb.conn.Write(aduRequest); err != nil {
+	if _, err = mb.Conn.Write(aduRequest); err != nil {
 		if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
 			mb.close()
 		}
@@ -121,7 +128,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		var data [rtuMaxSize]byte
 		//We first read the minimum length and then read either the full package
 		//or the error package, depending on the error status (byte 2 of the response)
-		if n, err = io.ReadFull(mb.conn, data[:rtuMinSize]); err != nil {
+		if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
 			return
 		}
 		//if the function is correct
@@ -130,7 +137,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 			if n < bytesToRead {
 				if bytesToRead > rtuMinSize && bytesToRead <= rtuMaxSize {
 					if bytesToRead > n {
-						n1, err = io.ReadFull(mb.conn, data[n:bytesToRead])
+						n1, err = io.ReadFull(mb.Conn, data[n:bytesToRead])
 						n += n1
 					}
 				}
@@ -138,7 +145,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		} else if data[1] == functionFail {
 			//for error we need to read 5 bytes
 			if n < rtuExceptionSize {
-				n1, err = io.ReadFull(mb.conn, data[n:rtuExceptionSize])
+				n1, err = io.ReadFull(mb.Conn, data[n:rtuExceptionSize])
 			}
 			n += n1
 		}
@@ -155,7 +162,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		var data [asciiMaxSize]byte
 		length := 0
 		for {
-			if n, err = io.ReadFull(mb.conn, data[length:length+1]); err != nil {
+			if n, err = io.ReadFull(mb.Conn, data[length:length+1]); err != nil {
 				return
 			}
 			length += n
@@ -175,7 +182,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 	} else {
 		// Read header first
 		var data [tcpMaxLength]byte
-		if _, err = io.ReadFull(mb.conn, data[:tcpHeaderSize]); err != nil {
+		if _, err = io.ReadFull(mb.Conn, data[:tcpHeaderSize]); err != nil {
 			return
 		}
 		// Read length, ignore transaction & protocol id (4 bytes)
@@ -192,7 +199,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		}
 		// Skip unit id
 		length += tcpHeaderSize - 1
-		if _, err = io.ReadFull(mb.conn, data[tcpHeaderSize:length]); err != nil {
+		if _, err = io.ReadFull(mb.Conn, data[tcpHeaderSize:length]); err != nil {
 			return
 		}
 		aduResponse = data[:length]
@@ -211,10 +218,14 @@ func (mb *tcpServerTransporter) Connect() error {
 }
 
 func (mb *tcpServerTransporter) connect() error {
-	if mb.conn == nil {
-		err := mb.waitConnect()
-		if err != nil {
-			return err
+	if mb.Conn == nil {
+		if mb.RegMsg == "" {
+			err := mb.waitConnect()
+			if err != nil {
+				return err
+			}
+		} else {
+			return errors.New("not connect")
 		}
 	}
 	return nil
@@ -242,11 +253,11 @@ func (mb *tcpServerTransporter) Close() error {
 // flush flushes pending data in the connection,
 // returns io.EOF if connection is closed.
 func (mb *tcpServerTransporter) flush(b []byte) (err error) {
-	if err = mb.conn.SetReadDeadline(time.Now()); err != nil {
+	if err = mb.Conn.SetReadDeadline(time.Now()); err != nil {
 		return
 	}
 	// Timeout setting will be reset when reading
-	if _, err = mb.conn.Read(b); err != nil {
+	if _, err = mb.Conn.Read(b); err != nil {
 		// Ignore timeout error
 		if netError, ok := err.(net.Error); ok && netError.Timeout() {
 			err = nil
@@ -259,11 +270,11 @@ func (mb *tcpServerTransporter) flush(b []byte) (err error) {
 // returns io.EOF if connection is closed.
 func (mb *tcpServerTransporter) Flush() (err error) {
 	var b [tcpMaxLength]byte
-	if err = mb.conn.SetReadDeadline(time.Now()); err != nil {
+	if err = mb.Conn.SetReadDeadline(time.Now()); err != nil {
 		return
 	}
 	// Timeout setting will be reset when reading
-	if _, err = mb.conn.Read(b[:]); err != nil {
+	if _, err = mb.Conn.Read(b[:]); err != nil {
 		// Ignore timeout error
 		if netError, ok := err.(net.Error); ok && netError.Timeout() {
 			err = nil
@@ -280,9 +291,9 @@ func (mb *tcpServerTransporter) logf(format string, v ...interface{}) {
 
 // closeLocked closes current connection. Caller must hold the mutex before calling this method.
 func (mb *tcpServerTransporter) close() (err error) {
-	if mb.conn != nil {
-		err = mb.conn.Close()
-		mb.conn = nil
+	if mb.Conn != nil {
+		err = mb.Conn.Close()
+		mb.Conn = nil
 	}
 	return
 }
