@@ -81,15 +81,23 @@ type tcpServerTransporter struct {
 	RegMsg string
 
 	//RtuOverTCP
-	RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
+	// RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
 
-	AsciiOverTCPtp bool
+	// AsciiOverTCPtp bool
+
+	ListenMode bool
+
+	ChannelTypeTp string
+	TransModeTp   string
+
+	DeviceID string
 
 	listener net.Listener
 }
 
 // Send sends data to server and ensures response length is greater than header length.
 func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err error) {
+
 	mb.mu.Lock()
 	defer mb.mu.Unlock()
 
@@ -109,16 +117,21 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 	if err = mb.Conn.SetDeadline(timeout); err != nil {
 		return
 	}
-	// Send data
-	mb.logf("sending % x", aduRequest)
-	if _, err = mb.Conn.Write(aduRequest); err != nil {
-		if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
-			mb.close()
+
+	if mb.ListenMode {
+		mb.logf("fake send % x", aduRequest)
+	} else {
+		// Send data
+		mb.logf("sending % x", aduRequest)
+		if _, err = mb.Conn.Write(aduRequest); err != nil {
+			if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
+				mb.close()
+			}
+			return
 		}
-		return
 	}
 
-	if mb.RtuOverTCPtp {
+	if mb.TransModeTp == RTU {
 		function := aduRequest[1]
 		functionFail := aduRequest[1] & 0x80
 		bytesToRead := calculateResponseLength(aduRequest)
@@ -156,7 +169,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		aduResponse = data[:n]
 		mb.logf("modbus: received % x\n", aduResponse)
 		return
-	} else if mb.AsciiOverTCPtp {
+	} else if mb.TransModeTp == ASCII {
 		// Get the response
 		var n int
 		var data [asciiMaxSize]byte

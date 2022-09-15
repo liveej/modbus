@@ -26,6 +26,11 @@ const (
 	// Default TCP timeout is not set
 	tcpTimeout     = 10 * time.Second
 	tcpIdleTimeout = 60 * time.Second
+
+	TCPSERVER = "TCP-Server"
+	TCPCLIENT = "TCP-Client"
+	RTU       = "RTU"
+	ASCII     = "ASCII"
 )
 
 // TCPClientHandler implements Packager and Transporter interface.
@@ -59,10 +64,13 @@ type tcpPackager struct {
 	transactionId uint32
 	// Broadcast address is 0
 	SlaveId byte
+
+	ChannelType string
+	TransMode   string
 	//RTU over TCP mode
-	RtuOverTCP bool
+	//RtuOverTCP bool
 	//Ascii over TCP mode
-	AsciiOverTCP bool
+	//AsciiOverTCP bool
 }
 
 // Encode adds modbus application protocol header:
@@ -73,7 +81,7 @@ type tcpPackager struct {
 //  Function code: 1 byte
 //  Data: n bytes
 func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
-	if mb.RtuOverTCP {
+	if mb.TransMode == RTU {
 		length := len(pdu.Data) + 4
 		if length > rtuMaxSize {
 			err = fmt.Errorf("modbus: length of data '%v' must not be bigger than '%v'", length, rtuMaxSize)
@@ -93,7 +101,7 @@ func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 		adu[length-1] = byte(checksum >> 8)
 		adu[length-2] = byte(checksum)
 		return
-	} else if mb.AsciiOverTCP {
+	} else if mb.TransMode == ASCII {
 		var buf bytes.Buffer
 
 		if _, err = buf.WriteString(asciiStart); err != nil {
@@ -140,7 +148,7 @@ func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 
 // Verify confirms transaction, protocol and unit id.
 func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error) {
-	if mb.RtuOverTCP {
+	if mb.TransMode == RTU {
 		length := len(aduResponse)
 		// Minimum size (including address, function and CRC)
 		if length < rtuMinSize {
@@ -153,7 +161,7 @@ func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error)
 			return
 		}
 		return
-	} else if mb.AsciiOverTCP {
+	} else if mb.TransMode == ASCII {
 		length := len(aduResponse)
 		// Minimum size (including address, function and LRC)
 		if length < asciiMinSize+6 {
@@ -222,7 +230,7 @@ func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error)
 //  Length: 2 bytes
 //  Unit identifier: 1 byte
 func (mb *tcpPackager) Decode(adu []byte) (pdu *ProtocolDataUnit, err error) {
-	if mb.RtuOverTCP {
+	if mb.TransMode == RTU {
 		length := len(adu)
 		// Calculate checksum
 		var crc crc
@@ -237,7 +245,7 @@ func (mb *tcpPackager) Decode(adu []byte) (pdu *ProtocolDataUnit, err error) {
 		pdu.FunctionCode = adu[1]
 		pdu.Data = adu[2 : length-2]
 		return
-	} else if mb.AsciiOverTCP {
+	} else if mb.TransMode == ASCII {
 		pdu = &ProtocolDataUnit{}
 		// Slave address
 		var address byte
@@ -306,9 +314,11 @@ type tcpTransporter struct {
 	lastActivity time.Time
 
 	//RtuOverTCP
-	RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
+	//RtuOverTCPtp bool //TODO: How to get tcpPackager's flag?
 	//Ascii over TCP mode
-	AsciiOverTCPtp bool
+	//AsciiOverTCPtp bool
+	ChannelTypeTp string
+	TransModeTp   string
 }
 
 // Send sends data to server and ensures response length is greater than header length.
@@ -340,7 +350,7 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 		return
 	}
 
-	if mb.RtuOverTCPtp {
+	if mb.TransModeTp == RTU {
 		function := aduRequest[1]
 		functionFail := aduRequest[1] & 0x80
 		bytesToRead := calculateResponseLength(aduRequest)
@@ -378,7 +388,7 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 		aduResponse = data[:n]
 		mb.logf("modbus: received % x\n", aduResponse)
 		return
-	} else if mb.AsciiOverTCPtp {
+	} else if mb.TransModeTp == ASCII {
 		// Get the response
 		var n int
 		var data [asciiMaxSize]byte
@@ -407,6 +417,7 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 		if _, err = io.ReadFull(mb.conn, data[:tcpHeaderSize]); err != nil {
 			return
 		}
+		mb.logf("modbus: received % x\n", aduResponse)
 		// Read length, ignore transaction & protocol id (4 bytes)
 		length := int(binary.BigEndian.Uint16(data[4:]))
 		if length <= 0 {
@@ -425,7 +436,7 @@ func (mb *tcpTransporter) Send(aduRequest []byte) (aduResponse []byte, err error
 			return
 		}
 		aduResponse = data[:length]
-		mb.logf("modbus: received % x\n", aduResponse)
+		//mb.logf("modbus: received % x\n", aduResponse)
 		return
 	}
 }
