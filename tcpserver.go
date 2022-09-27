@@ -141,7 +141,10 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		var data [rtuMaxSize]byte
 		//We first read the minimum length and then read either the full package
 		//or the error package, depending on the error status (byte 2 of the response)
-		if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
+		//if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
+		//	return
+		//}
+		if n, err = mb.Conn.Read(data[:]); err != nil {
 			return
 		}
 		//if the function is correct
