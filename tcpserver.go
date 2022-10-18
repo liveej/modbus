@@ -95,6 +95,17 @@ type tcpServerTransporter struct {
 	listener net.Listener
 }
 
+func (mb *tcpServerTransporter) SendGo(aduRequest []byte) {
+	time.Sleep(100 * time.Microsecond)
+	mb.logf("sending % x", aduRequest)
+	if _, err := mb.Conn.Write(aduRequest); err != nil {
+		if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
+			mb.close()
+		}
+		return
+	}
+}
+
 // Send sends data to server and ensures response length is greater than header length.
 func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err error) {
 
@@ -121,14 +132,16 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 	if mb.ListenMode {
 		mb.logf("fake send % x", aduRequest)
 	} else {
+		go mb.SendGo(aduRequest)
+
 		// Send data
-		mb.logf("sending % x", aduRequest)
-		if _, err = mb.Conn.Write(aduRequest); err != nil {
-			if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
-				mb.close()
-			}
-			return
-		}
+		// mb.logf("sending % x", aduRequest)
+		// if _, err = mb.Conn.Write(aduRequest); err != nil {
+		// 	if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
+		// 		mb.close()
+		// 	}
+		// 	return
+		// }
 	}
 
 	if mb.TransModeTp == RTU {
@@ -138,14 +151,28 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 
 		var n int
 		var n1 int
-		var data [rtuMaxSize]byte
+		var data [rtuMaxSize + rtuMaxSize]byte
 		//We first read the minimum length and then read either the full package
 		//or the error package, depending on the error status (byte 2 of the response)
-		//if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
-		//	return
-		//}
+		// if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
+		// 	return
+		// }
 		if n, err = mb.Conn.Read(data[:]); err != nil {
 			return
+		}
+		//mb.logf("modbus: rx head raw: % x\n", data[:n])
+		for i := 0; i < n; i++ {
+			if data[i] == aduRequest[0] && data[i+1] == aduRequest[1] {
+				if i == 0 {
+					break
+				} else {
+					for j := 0; j < n-i; j++ {
+						data[j] = data[i+j]
+					}
+					n = n - i
+					break
+				}
+			}
 		}
 		//if the function is correct
 		if data[1] == function {
@@ -170,7 +197,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 			return
 		}
 		aduResponse = data[:n]
-		mb.logf("modbus: received % x\n", aduResponse)
+		mb.logf("modbus: rx % x\n", aduResponse)
 		return
 	} else if mb.TransModeTp == ASCII {
 		// Get the response
