@@ -19,6 +19,10 @@ func (mb *tcpServerTransporter) AssignConn(conn net.Conn) {
 	mb.Conn = conn
 }
 
+func (mb *tcpServerTransporter) GetConn() net.Conn {
+	return mb.Conn
+}
+
 func (mb *tcpServerTransporter) waitConnect() error {
 	mb.logf("listen on: %s", mb.Address)
 
@@ -96,8 +100,9 @@ type tcpServerTransporter struct {
 }
 
 func (mb *tcpServerTransporter) SendGo(aduRequest []byte) {
+
 	time.Sleep(100 * time.Microsecond)
-	mb.logf("sending % x", aduRequest)
+	mb.logf("Conn:%s, TX % X", mb.Conn.RemoteAddr().String(), aduRequest)
 	if _, err := mb.Conn.Write(aduRequest); err != nil {
 		if netError, ok := err.(net.Error); ok && netError.Timeout() == false {
 			mb.close()
@@ -116,6 +121,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 	if err = mb.connect(); err != nil {
 		return
 	}
+	_ = mb.Flush()
 
 	// Set timer to close when idle
 	mb.lastActivity = time.Now()
@@ -132,6 +138,7 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 	if mb.ListenMode {
 		mb.logf("fake send % x", aduRequest)
 	} else {
+		//aduRequest = mb.Soft7bitTX(aduRequest)
 		go mb.SendGo(aduRequest)
 
 		// Send data
@@ -154,12 +161,14 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		var data [rtuMaxSize + rtuMaxSize]byte
 		//We first read the minimum length and then read either the full package
 		//or the error package, depending on the error status (byte 2 of the response)
-		// if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
-		// 	return
-		// }
-		if n, err = mb.Conn.Read(data[:]); err != nil {
+		if n, err = io.ReadFull(mb.Conn, data[:rtuMinSize]); err != nil {
+			mb.logf("modbus: rx rtuMinSize error: %v\n", err)
 			return
 		}
+		// if n, err = mb.Conn.Read(data[:]); err != nil {
+		// 	mb.logf("modbus: rx error: %v\n", err)
+		// 	return
+		// }
 		//mb.logf("modbus: rx head raw: % x\n", data[:n])
 		for i := 0; i < n; i++ {
 			if data[i] == aduRequest[0] && data[i+1] == aduRequest[1] {
@@ -196,8 +205,9 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 		if err != nil {
 			return
 		}
-		aduResponse = data[:n]
-		mb.logf("modbus: rx % x\n", aduResponse)
+		//aduResponse = data[:n]
+		aduResponse = data[:bytesToRead]
+		mb.logf("Conn:%s,RX:% X\n", mb.Conn.RemoteAddr().String(), aduResponse)
 		return
 	} else if mb.TransModeTp == ASCII {
 		// Get the response
@@ -219,8 +229,25 @@ func (mb *tcpServerTransporter) Send(aduRequest []byte) (aduResponse []byte, err
 				}
 			}
 		}
-		aduResponse = data[:length]
+
+		index := -1
+		for i := 0; i < len(data); i++ {
+			if data[i] == ':' {
+				index = i
+			}
+		}
+		if index == -1 {
+			err = errors.New("start char not found\n")
+			return
+		} else {
+			aduResponse = data[index:length]
+		}
+
 		mb.logf("modbus: received %q\n", aduResponse)
+		//aduResponse = mb.Soft7bitRX(aduResponse)
+		// for i := 0; i < len(aduResponse); i++ {
+		// 	aduResponse[i] = aduResponse[i] & 0x7F
+		// }
 		return
 	} else {
 		// Read header first
@@ -305,8 +332,9 @@ func (mb *tcpServerTransporter) flush(b []byte) (err error) {
 // Flush flushes pending data in the connection,
 // returns io.EOF if connection is closed.
 func (mb *tcpServerTransporter) Flush() (err error) {
-	var b [tcpMaxLength]byte
-	if err = mb.Conn.SetReadDeadline(time.Now()); err != nil {
+	var b [1024]byte
+	if err = mb.Conn.SetReadDeadline(time.Now().Add(time.Millisecond * 200)); err != nil {
+		mb.logf("Flush Error: %v", err)
 		return
 	}
 	// Timeout setting will be reset when reading
@@ -347,4 +375,35 @@ func (mb *tcpServerTransporter) closeIdle() {
 		mb.logf("modbus: closing connection due to idle timeout: %v", idle)
 		mb.close()
 	}
+}
+
+func (mb *tcpServerTransporter) Soft7bitTX(in []byte) []byte {
+	mb.logf("Soft7bitTX Raw: % X\n", in)
+	for i := 0; i < len(in); i++ {
+		// 统计字节中的 1 的个数
+		count := 0
+		raw := in[i]
+		for offset := uint(0); offset < 7; offset++ {
+			if raw&(1<<offset) != 0 {
+				count++
+			}
+		}
+		// 如果 1 的个数为奇数，则在第 8 位填充 1；否则填充 0
+		if count%2 == 1 {
+			in[i] = raw | 0x80
+		} else {
+			in[i] = raw & 0x7F
+		}
+	}
+	mb.logf("Soft7bitTX Prc: % X\n", in)
+	return in
+
+}
+
+func (mb *tcpServerTransporter) Soft7bitRX(in []byte) []byte {
+	mb.logf("Soft7bitRX Raw:% X\n", in)
+	for i := 0; i < len(in); i++ {
+		in[i] = in[i] & 0x7F
+	}
+	return in
 }

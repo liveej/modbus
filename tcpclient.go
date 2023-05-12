@@ -74,12 +74,13 @@ type tcpPackager struct {
 }
 
 // Encode adds modbus application protocol header:
-//  Transaction identifier: 2 bytes
-//  Protocol identifier: 2 bytes
-//  Length: 2 bytes
-//  Unit identifier: 1 byte
-//  Function code: 1 byte
-//  Data: n bytes
+//
+//	Transaction identifier: 2 bytes
+//	Protocol identifier: 2 bytes
+//	Length: 2 bytes
+//	Unit identifier: 1 byte
+//	Function code: 1 byte
+//	Data: n bytes
 func (mb *tcpPackager) Encode(pdu *ProtocolDataUnit) (adu []byte, err error) {
 	if mb.TransMode == RTU {
 		length := len(pdu.Data) + 4
@@ -225,10 +226,11 @@ func (mb *tcpPackager) Verify(aduRequest []byte, aduResponse []byte) (err error)
 }
 
 // Decode extracts PDU from TCP frame:
-//  Transaction identifier: 2 bytes
-//  Protocol identifier: 2 bytes
-//  Length: 2 bytes
-//  Unit identifier: 1 byte
+//
+//	Transaction identifier: 2 bytes
+//	Protocol identifier: 2 bytes
+//	Length: 2 bytes
+//	Unit identifier: 1 byte
 func (mb *tcpPackager) Decode(adu []byte) (pdu *ProtocolDataUnit, err error) {
 	if mb.TransMode == RTU {
 		length := len(adu)
@@ -237,7 +239,7 @@ func (mb *tcpPackager) Decode(adu []byte) (pdu *ProtocolDataUnit, err error) {
 		crc.reset().pushBytes(adu[0 : length-2])
 		checksum := uint16(adu[length-1])<<8 | uint16(adu[length-2])
 		if checksum != crc.value() {
-			err = fmt.Errorf("modbus: response crc '%v' does not match expected '%v'", checksum, crc.value())
+			err = fmt.Errorf("modbus: response crc '%X' does not match expected '%X'", checksum, crc.value())
 			return
 		}
 		// Function code & data
